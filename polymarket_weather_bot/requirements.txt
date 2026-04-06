@@ -1,0 +1,23 @@
+# Polymarket Weather Bot — Dependências
+# Instale com: pip install -r requirements.txt
+
+# HTTP e APIs
+requests>=2.31.0
+
+# Opcional: cliente oficial Copernicus CDS
+# Descomente se tiver credenciais Copernicus registradas
+# cdsapi>=0.6.1
+
+# Opcional: cliente oficial Polymarket CLOB (para trading real)
+# Descomente para operar com dinheiro real
+# py-clob-client>=0.18.0
+
+# Utilitários padrão (já incluídos no Python 3.10+)
+# - statistics  (built-in)
+# - sqlite3     (built-in)
+# - logging     (built-in)
+# - dataclasses (built-in)
+# - argparse    (built-in)
+# - uuid        (built-in)
+# - json        (built-in)
+# - math        (built-in)
