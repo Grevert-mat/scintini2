@@ -4,6 +4,9 @@
 # HTTP e APIs
 requests>=2.31.0
 
+# Carregamento automático do arquivo .env
+python-dotenv>=1.0.0
+
 # Scraping da FCCC (Cacique Cobra Coral) — recomendado
 # Melhora a extração de texto dos boletins HTML
 beautifulsoup4>=4.12.0

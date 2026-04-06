@@ -27,6 +27,9 @@ class APIConfig:
     # NOAA / NWS — gratuito, sem chave obrigatória
     # NASA POWER — gratuito, sem chave obrigatória
 
+    # Polymarket — chave privada da carteira Polygon (somente trading real)
+    polymarket_private_key: str = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+
 
 # ---------------------------------------------------------------------------
 # Alvo geográfico (lat/lon da cidade monitorada)

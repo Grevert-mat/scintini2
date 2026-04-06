@@ -7,17 +7,26 @@ Uso:
     python main.py --report         # Exibe relatório de performance e sai
     python main.py --demo           # Demonstra a lógica sem fazer chamadas de API reais
 
-Variáveis de ambiente suportadas (opcional, pode editar config.py diretamente):
+Credenciais: coloque no arquivo .env na mesma pasta (nunca enviado ao git):
     OWM_API_KEY          OpenWeatherMap API Key
     METEOMATICS_USER     Meteomatics username
     METEOMATICS_PASS     Meteomatics password
-    CDS_API_KEY          Copernicus CDS key (formato UID:KEY)
+    CDS_API_KEY          Copernicus CDS key (formato UID:TOKEN)
+    POLYMARKET_PRIVATE_KEY  Chave privada Polygon (somente trading real)
 """
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timezone
+
+# Carrega .env antes de qualquer import que leia os.getenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv não instalado; variáveis de ambiente manuais ainda funcionam
 
 from config import config
 from trading_engine import TradingEngine
