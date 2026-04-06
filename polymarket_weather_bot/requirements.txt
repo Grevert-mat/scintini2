@@ -4,6 +4,10 @@
 # HTTP e APIs
 requests>=2.31.0
 
+# Scraping da FCCC (Cacique Cobra Coral) — recomendado
+# Melhora a extração de texto dos boletins HTML
+beautifulsoup4>=4.12.0
+
 # Opcional: cliente oficial Copernicus CDS
 # Descomente se tiver credenciais Copernicus registradas
 # cdsapi>=0.6.1
@@ -21,3 +25,4 @@ requests>=2.31.0
 # - uuid        (built-in)
 # - json        (built-in)
 # - math        (built-in)
+# - re          (built-in)

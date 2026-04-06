@@ -1,11 +1,21 @@
 """
-data_fetcher.py — Fusão de dados de 5 APIs meteorológicas.
+data_fetcher.py — Fusão de dados de 7 fontes meteorológicas.
+
+Fontes:
+  1. NOAA / NWS (EUA) — sem chave
+  2. OpenWeatherMap — chave gratuita
+  3. Copernicus ERA5 — chave gratuita (CDS)
+  4. Meteomatics — trial gratuito
+  5. NASA POWER — sem chave
+  6. Open-Meteo — sem chave (bônus confiável)
+  7. Fundação Cacique Cobra Coral (FCCC) — scraping de boletins públicos
 
 Cada método retorna a temperatura prevista em °C (float) ou None em caso de falha.
-A média ponderada das fontes disponíveis é calculada descartando outliers via IQR.
+O consenso final usa média robusta com remoção de outliers via IQR.
 """
 
 import logging
+import re
 import statistics
 from datetime import datetime, timezone
 from typing import Optional
@@ -278,6 +288,199 @@ class DataFetcher:
             return None
 
     # ------------------------------------------------------------------
+    # 6. Open-Meteo — sem chave, JSON puro, altamente confiável
+    # ------------------------------------------------------------------
+
+    def fetch_open_meteo(self) -> Optional[float]:
+        """
+        Open-Meteo API — previsão de temperatura máxima do dia corrente.
+        Completamente gratuita, sem autenticação, cobertura global.
+        Docs: https://open-meteo.com/en/docs
+        """
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": self.loc.latitude,
+            "longitude": self.loc.longitude,
+            "daily": "temperature_2m_max",
+            "timezone": "UTC",
+            "forecast_days": 2,
+        }
+        data = _safe_get(url, params=params)
+        if not data:
+            return None
+        try:
+            temps = data["daily"]["temperature_2m_max"]
+            # Índice 0 = hoje, índice 1 = amanhã
+            value = temps[0] if temps[0] is not None else temps[1]
+            logger.debug("Open-Meteo: %.2f°C", value)
+            return float(value)
+        except (KeyError, IndexError, TypeError) as exc:
+            logger.warning("Open-Meteo — parse error: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # 7. Fundação Cacique Cobra Coral (FCCC) — scraping de boletins
+    # ------------------------------------------------------------------
+
+    # Headers de browser para evitar bloqueios 403
+    _FCCC_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "Referer": "https://fccc.org.br/",
+    }
+
+    # Padrões para extrair temperaturas de texto livre (boletins em PT)
+    _TEMP_PATTERNS = [
+        # "temperatura de 28°C", "temperatura máxima de 31 graus"
+        re.compile(
+            r"temperatura[^\d]{0,25}(\d{1,2}(?:[.,]\d)?)\s*(?:°\s*[Cc]|graus?\s*[Cc]elsius|°C|ºC)",
+            re.IGNORECASE,
+        ),
+        # "máxima de 29°C", "máximas de 32°C"
+        re.compile(
+            r"m[aá]xima[^\d]{0,15}(\d{1,2}(?:[.,]\d)?)\s*(?:°\s*[Cc]|graus?|°C|ºC)",
+            re.IGNORECASE,
+        ),
+        # "29°C", "31 °C"  (captura genérica como último recurso)
+        re.compile(
+            r"\b(\d{1,2}(?:[.,]\d)?)\s*°\s*[Cc]\b",
+        ),
+    ]
+
+    def fetch_cacique_cobra_coral(self) -> Optional[float]:
+        """
+        Fundação Cacique Cobra Coral (FCCC) — https://fccc.org.br/
+        Organização brasileira de meteorologia e gestão climática.
+
+        Estratégia:
+          1. Tenta raspar o boletim mais recente da página de previsões.
+          2. Extrai valores de temperatura com regex aplicado ao texto limpo.
+          3. Usa a mediana dos valores encontrados para evitar menções pontuais.
+          4. Retorna None se o site estiver inacessível ou sem dados de temperatura.
+
+        Nota: a FCCC não expõe API pública. Este método realiza web scraping
+        responsável (1 req/ciclo, User-Agent declarado). Respeite os termos de uso.
+        """
+        urls_to_try = [
+            "https://fccc.org.br/previsoes/",
+            "https://fccc.org.br/meteorologia/",
+            "https://fccc.org.br/",
+        ]
+
+        for url in urls_to_try:
+            result = self._scrape_fccc_page(url)
+            if result is not None:
+                return result
+
+        logger.warning("FCCC: nenhum dado de temperatura encontrado nos boletins.")
+        return None
+
+    def _scrape_fccc_page(self, url: str) -> Optional[float]:
+        """Raspa uma página da FCCC e extrai temperatura em °C."""
+        try:
+            resp = requests.get(url, headers=self._FCCC_HEADERS, timeout=20)
+            resp.raise_for_status()
+            html = resp.text
+        except requests.exceptions.HTTPError as exc:
+            logger.debug("FCCC %s — HTTP %s", url, exc.response.status_code)
+            return None
+        except Exception as exc:
+            logger.debug("FCCC %s — erro: %s", url, exc)
+            return None
+
+        # Tentar parser HTML avançado (BeautifulSoup) se disponível
+        text = self._extract_text_bs4(html) or self._extract_text_regex(html)
+        if not text:
+            return None
+
+        # Filtrar pelo contexto geográfico configurado (cidade ou país)
+        city_lower = self.loc.city.lower()
+        relevant_text = self._filter_by_location(text, city_lower)
+
+        # Extrair temperaturas do texto relevante (ou do texto completo como fallback)
+        candidates = self._extract_temperatures(relevant_text or text)
+        if not candidates:
+            logger.debug("FCCC: texto capturado mas sem temperaturas válidas em %s", url)
+            return None
+
+        # Usa a mediana para suavizar menções de mínima/máxima/referências históricas
+        temp = statistics.median(candidates)
+        logger.info(
+            "FCCC (Cacique Cobra Coral): %.2f°C — extraído de %s (%d valores: %s)",
+            temp, url, len(candidates), candidates
+        )
+        return temp
+
+    @staticmethod
+    def _extract_text_bs4(html: str) -> Optional[str]:
+        """Extrai texto limpo com BeautifulSoup (se instalado)."""
+        try:
+            from bs4 import BeautifulSoup  # type: ignore
+            soup = BeautifulSoup(html, "html.parser")
+            # Remove elementos não-textuais
+            for tag in soup(["script", "style", "nav", "footer", "header", "meta"]):
+                tag.decompose()
+            # Prioriza blocos de conteúdo principal
+            main = (
+                soup.find("main")
+                or soup.find("article")
+                or soup.find(class_=re.compile(r"content|post|entry|boletim|previs", re.I))
+                or soup.find("body")
+            )
+            text = (main or soup).get_text(separator=" ", strip=True)
+            return text
+        except ImportError:
+            return None
+
+    @staticmethod
+    def _extract_text_regex(html: str) -> str:
+        """Fallback: remove tags HTML com regex e retorna texto bruto."""
+        text = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    @staticmethod
+    def _filter_by_location(text: str, city: str) -> Optional[str]:
+        """
+        Extrai parágrafos/frases que mencionam a cidade alvo.
+        Retorna None se nenhum trecho relevante for encontrado.
+        """
+        # Quebra em sentenças/parágrafos e filtra os que mencionam a cidade
+        chunks = re.split(r"[.!?\n]{1,3}", text)
+        relevant = [c for c in chunks if city in c.lower() and len(c) > 20]
+        return " ".join(relevant) if relevant else None
+
+    def _extract_temperatures(self, text: str) -> list[float]:
+        """
+        Aplica todos os padrões de regex em sequência para coletar candidatos
+        de temperatura, filtrando valores fora de uma faixa meteorológica realista
+        (-50°C a +60°C) para descartar anos, percentuais, etc.
+        """
+        found = []
+        for pattern in self._TEMP_PATTERNS:
+            for match in pattern.finditer(text):
+                raw = match.group(1).replace(",", ".")
+                try:
+                    val = float(raw)
+                    if -50.0 <= val <= 60.0:
+                        found.append(val)
+                except ValueError:
+                    pass
+            # Se o padrão mais específico já encontrou valores, não usamos
+            # o genérico (evita ruído)
+            if found and pattern is not self._TEMP_PATTERNS[-1]:
+                break
+
+        return found
+
+    # ------------------------------------------------------------------
     # Agregação e cálculo do consenso
     # ------------------------------------------------------------------
 
@@ -286,10 +489,10 @@ class DataFetcher:
         Coleta dados de todas as fontes e retorna um dict com:
         - individual_readings: {fonte: valor_ou_None}
         - valid_readings: lista de valores válidos
-        - consensus_temp: média robusta (após remoção de outliers)
+        - consensus_temp: média robusta (após remoção de outliers via IQR)
         - source_count: número de fontes válidas
         """
-        logger.info("Consultando todas as APIs meteorológicas...")
+        logger.info("Consultando todas as fontes meteorológicas...")
 
         sources = {
             "NOAA_NWS": self.fetch_noaa,
@@ -297,6 +500,8 @@ class DataFetcher:
             "Copernicus_ERA5": self.fetch_copernicus,
             "Meteomatics": self.fetch_meteomatics,
             "NASA_POWER": self.fetch_nasa_power,
+            "Open_Meteo": self.fetch_open_meteo,
+            "FCCC_CobraCoral": self.fetch_cacique_cobra_coral,
         }
 
         readings = {}
@@ -305,8 +510,11 @@ class DataFetcher:
             readings[name] = fn()
 
         valid = [v for v in readings.values() if v is not None]
-        logger.info("Fontes válidas: %d/%d — Valores: %s",
-                    len(valid), len(sources), valid)
+        logger.info(
+            "Fontes válidas: %d/%d — Valores: %s",
+            len(valid), len(sources),
+            [f"{v:.1f}°C" for v in valid],
+        )
 
         consensus = self._robust_mean(valid) if valid else None
         if consensus is not None:

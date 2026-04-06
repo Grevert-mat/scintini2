@@ -107,7 +107,8 @@ def run_demo():
         bankroll_before=10.00,
         weather_sources={
             "NOAA_NWS": 34.1, "OpenWeatherMap": 33.8,
-            "Copernicus_ERA5": None, "Meteomatics": 34.5, "NASA_POWER": 33.2
+            "Copernicus_ERA5": None, "Meteomatics": 34.5, "NASA_POWER": 33.2,
+            "Open_Meteo": 33.6, "FCCC_CobraCoral": 34.0,
         },
         consensus_temp=33.9,
         my_probability=prob,
